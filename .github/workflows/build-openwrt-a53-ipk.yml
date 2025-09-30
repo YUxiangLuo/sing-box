@@ -7,7 +7,7 @@ on:
     tags: [ "v*" ]
 
 permissions:
-  contents: read
+  contents: write   # 需要写权限才能发布到 Releases
 
 jobs:
   build-ipk-a53:
@@ -27,46 +27,45 @@ jobs:
       - name: Build sing-box for linux/arm64
         env:
           GOOS: linux
-          GOARCH: arm64   # Cortex-A53 属于 ARMv8-A（64位），用 arm64 即可
-          CGO_ENABLED: 0  # 纯 Go，减少依赖
+          GOARCH: arm64
+          CGO_ENABLED: 0
         run: |
+          set -eux
           mkdir -p dist/root/usr/bin
           go mod download
           go build -v -trimpath -ldflags="-s -w" -o dist/root/usr/bin/sing-box ./cmd/sing-box
           file dist/root/usr/bin/sing-box
           chmod +x dist/root/usr/bin/sing-box
 
-      # 组装 OpenWrt IPK (ipk = ar 档，包含 debian-binary + control.tar.gz + data.tar.gz)
       - name: Pack as OpenWrt IPK (aarch64_cortex-a53)
-        env:
-          PKG_NAME: sing-box
-          PKG_VERSION: "${{ github.ref_name }}"
         run: |
           set -eux
 
-          # 版本号：如果不是 tag，就回退到 git 短哈希
-          if [[ "$PKG_VERSION" == refs/* || -z "$PKG_VERSION" ]]; then
+          # 版本号：tag 优先；否则用 git 短哈希
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            PKG_VERSION="${GITHUB_REF_NAME}"
+          else
             PKG_VERSION="git-${GITHUB_SHA::7}"
           fi
+          echo "Package version: $PKG_VERSION"
 
-          WORK=dist/ipk
-          ROOT=dist/root
-          CTRL=$WORK/CONTROL
+          ROOT="dist/root"
+          WORK="dist/ipk"
+          CTRL="$WORK/CONTROL"
           mkdir -p "$WORK" "$CTRL"
 
-          # control 文件（最关键的是 Architecture）
-          cat > "$CTRL/control" <<'EOF'
+          # control（最简必要字段，按需添加 Depends/Conflicts 等）
+          cat > "$CTRL/control" <<EOF
           Package: sing-box
-          Version: __PKG_VERSION__
+          Version: $PKG_VERSION
           Architecture: aarch64_cortex-a53
-          Maintainer: YourName <you@example.com>
+          Maintainer: You <you@example.com>
           Section: net
           Priority: optional
-          Description: sing-box - universal proxy platform (prebuilt for aarch64_cortex-a53)
+          Description: sing-box - universal proxy platform (aarch64_cortex-a53)
           EOF
-          sed -i "s|__PKG_VERSION__|${PKG_VERSION}|g" "$CTRL/control"
 
-          # 可选：postinst/prerm（这里给出最小化示例；需要的话再扩展）
+          # 可选脚本
           cat > "$CTRL/postinst" <<'EOF'
           #!/bin/sh
           set -e
@@ -75,24 +74,22 @@ jobs:
           EOF
           chmod +x "$CTRL/postinst"
 
-          # data.tar.gz：放入文件根（我们把二进制放 /usr/bin/sing-box）
+          # 生成 data.tar.gz（实际文件内容）与 control.tar.gz（包元数据）
           (cd "$ROOT" && tar -czf ../data.tar.gz .)
-
-          # control.tar.gz：包含 control、(可选) postinst 等
           (cd "$CTRL" && tar -czf ../control.tar.gz .)
 
-          # debian-binary：固定内容“2.0”
+          # debian-binary 固定为 "2.0"
           echo "2.0" > "$WORK/debian-binary"
 
-          # 生成 .ipk（使用 `ar` 打包）
-          IPK="dist/${PKG_NAME}_${PKG_VERSION}_aarch64_cortex-a53.ipk"
-          (cd "$WORK" && ar r "$PWD/../tmp.ipk" debian-binary control.tar.gz data.tar.gz)
+          # 用 ar 打包为 .ipk
+          IPK="dist/sing-box_${PKG_VERSION}_aarch64_cortex-a53.ipk"
+          (cd "$WORK" && ar r "../tmp.ipk" debian-binary control.tar.gz ../data.tar.gz)
           mv dist/tmp.ipk "$IPK"
 
           # 校验文件
           (cd dist && sha256sum *.ipk > checksums.txt)
 
-      - name: Upload artifacts
+      - name: Upload artifacts (always)
         uses: actions/upload-artifact@v4
         with:
           name: openwrt-aarch64_cortex-a53-ipk
@@ -100,3 +97,15 @@ jobs:
             dist/*.ipk
             dist/checksums.txt
           if-no-files-found: error
+
+      - name: Publish GitHub Release (only on tag)
+        if: ${{ github.ref_type == 'tag' }}
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: sing-box ${{ github.ref_name }} (aarch64_cortex-a53)
+          draft: false
+          prerelease: false
+          files: |
+            dist/*.ipk
+            dist/checksums.txt
