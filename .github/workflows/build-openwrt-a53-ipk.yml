@@ -50,9 +50,8 @@ jobs:
           echo "Package version: $PKG_VERSION"
 
           ROOT="dist/root"
-          WORK="dist/ipk"
-          CTRL="$WORK/CONTROL"
-          mkdir -p "$WORK" "$CTRL"
+          CTRL="dist/ipk/CONTROL"
+          mkdir -p "$CTRL"
 
           # control 文件
           cat > "$CTRL/control" <<EOF
@@ -74,8 +73,8 @@ jobs:
           EOF
           chmod +x "$CTRL/postinst"
 
-          # 压缩内容到 dist 目录
-          (cd "$ROOT" && tar -czf ../../data.tar.gz .)
+          # 压缩内容（直接放到 dist 目录）
+          (cd "$ROOT" && tar -czf ../data.tar.gz .)
           (cd "$CTRL" && tar -czf ../../control.tar.gz .)
 
           # debian-binary 固定为 2.0
@@ -93,7 +92,7 @@ jobs:
           echo "Check IPK content:"
           ar t "$IPK"
 
-          # 解包并打印 control 内容（方便在日志里确认）
+          # 解包并打印 control 内容
           mkdir -p check && cd check
           ar x ../"$IPK"
           tar -xzf control.tar.gz
