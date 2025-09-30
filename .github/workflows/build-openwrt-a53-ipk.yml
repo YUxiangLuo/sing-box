@@ -54,7 +54,7 @@ jobs:
           CTRL="$WORK/CONTROL"
           mkdir -p "$WORK" "$CTRL"
 
-          # control（最简必要字段，按需添加 Depends/Conflicts 等）
+          # control 文件
           cat > "$CTRL/control" <<EOF
           Package: sing-box
           Version: $PKG_VERSION
@@ -65,7 +65,7 @@ jobs:
           Description: sing-box - universal proxy platform (aarch64_cortex-a53)
           EOF
 
-          # 可选脚本
+          # 简单的 postinst
           cat > "$CTRL/postinst" <<'EOF'
           #!/bin/sh
           set -e
@@ -74,38 +74,16 @@ jobs:
           EOF
           chmod +x "$CTRL/postinst"
 
-          # 生成 data.tar.gz（实际文件内容）与 control.tar.gz（包元数据）
+          # 压缩内容
           (cd "$ROOT" && tar -czf ../data.tar.gz .)
           (cd "$CTRL" && tar -czf ../control.tar.gz .)
 
-          # debian-binary 固定为 "2.0"
-          echo "2.0" > "$WORK/debian-binary"
+          # debian-binary 固定为 2.0
+          echo "2.0" > debian-binary
 
-          # 用 ar 打包为 .ipk
+          # 正确生成 .ipk —— 顺序非常重要！
           IPK="dist/sing-box_${PKG_VERSION}_aarch64_cortex-a53.ipk"
-          (cd "$WORK" && ar r "../tmp.ipk" debian-binary control.tar.gz ../data.tar.gz)
-          mv dist/tmp.ipk "$IPK"
+          ar rcs "$IPK" debian-binary control.tar.gz data.tar.gz
 
-          # 校验文件
+          # 校验
           (cd dist && sha256sum *.ipk > checksums.txt)
-
-      - name: Upload artifacts (always)
-        uses: actions/upload-artifact@v4
-        with:
-          name: openwrt-aarch64_cortex-a53-ipk
-          path: |
-            dist/*.ipk
-            dist/checksums.txt
-          if-no-files-found: error
-
-      - name: Publish GitHub Release (only on tag)
-        if: ${{ github.ref_type == 'tag' }}
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ github.ref_name }}
-          name: sing-box ${{ github.ref_name }} (aarch64_cortex-a53)
-          draft: false
-          prerelease: false
-          files: |
-            dist/*.ipk
-            dist/checksums.txt
