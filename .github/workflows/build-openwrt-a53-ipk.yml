@@ -81,9 +81,34 @@ jobs:
           # debian-binary 固定为 2.0
           echo "2.0" > debian-binary
 
-          # 正确生成 .ipk —— 顺序非常重要！
+          # 正确生成 .ipk —— 顺序必须是 debian-binary → control.tar.gz → data.tar.gz
           IPK="dist/sing-box_${PKG_VERSION}_aarch64_cortex-a53.ipk"
           ar rcs "$IPK" debian-binary control.tar.gz data.tar.gz
 
           # 校验
           (cd dist && sha256sum *.ipk > checksums.txt)
+
+          # 校验 ipk 结构（可选）
+          echo "Check IPK content:"
+          ar t "$IPK"
+
+      - name: Upload artifacts (always)
+        uses: actions/upload-artifact@v4
+        with:
+          name: openwrt-aarch64_cortex-a53-ipk
+          path: |
+            dist/*.ipk
+            dist/checksums.txt
+          if-no-files-found: error
+
+      - name: Publish GitHub Release (only on tag)
+        if: ${{ github.ref_type == 'tag' }}
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: sing-box ${{ github.ref_name }} (aarch64_cortex-a53)
+          draft: false
+          prerelease: false
+          files: |
+            dist/*.ipk
+            dist/checksums.txt
