@@ -1,0 +1,102 @@
+name: Build OpenWrt IPK (aarch64_cortex-a53)
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main, master ]
+    tags: [ "v*" ]
+
+permissions:
+  contents: read
+
+jobs:
+  build-ipk-a53:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          check-latest: true
+          cache: true
+
+      - name: Build sing-box for linux/arm64
+        env:
+          GOOS: linux
+          GOARCH: arm64   # Cortex-A53 属于 ARMv8-A（64位），用 arm64 即可
+          CGO_ENABLED: 0  # 纯 Go，减少依赖
+        run: |
+          mkdir -p dist/root/usr/bin
+          go mod download
+          go build -v -trimpath -ldflags="-s -w" -o dist/root/usr/bin/sing-box ./cmd/sing-box
+          file dist/root/usr/bin/sing-box
+          chmod +x dist/root/usr/bin/sing-box
+
+      # 组装 OpenWrt IPK (ipk = ar 档，包含 debian-binary + control.tar.gz + data.tar.gz)
+      - name: Pack as OpenWrt IPK (aarch64_cortex-a53)
+        env:
+          PKG_NAME: sing-box
+          PKG_VERSION: "${{ github.ref_name }}"
+        run: |
+          set -eux
+
+          # 版本号：如果不是 tag，就回退到 git 短哈希
+          if [[ "$PKG_VERSION" == refs/* || -z "$PKG_VERSION" ]]; then
+            PKG_VERSION="git-${GITHUB_SHA::7}"
+          fi
+
+          WORK=dist/ipk
+          ROOT=dist/root
+          CTRL=$WORK/CONTROL
+          mkdir -p "$WORK" "$CTRL"
+
+          # control 文件（最关键的是 Architecture）
+          cat > "$CTRL/control" <<'EOF'
+          Package: sing-box
+          Version: __PKG_VERSION__
+          Architecture: aarch64_cortex-a53
+          Maintainer: YourName <you@example.com>
+          Section: net
+          Priority: optional
+          Description: sing-box - universal proxy platform (prebuilt for aarch64_cortex-a53)
+          EOF
+          sed -i "s|__PKG_VERSION__|${PKG_VERSION}|g" "$CTRL/control"
+
+          # 可选：postinst/prerm（这里给出最小化示例；需要的话再扩展）
+          cat > "$CTRL/postinst" <<'EOF'
+          #!/bin/sh
+          set -e
+          [ -x /usr/bin/sing-box ] && echo "sing-box installed."
+          exit 0
+          EOF
+          chmod +x "$CTRL/postinst"
+
+          # data.tar.gz：放入文件根（我们把二进制放 /usr/bin/sing-box）
+          (cd "$ROOT" && tar -czf ../data.tar.gz .)
+
+          # control.tar.gz：包含 control、(可选) postinst 等
+          (cd "$CTRL" && tar -czf ../control.tar.gz .)
+
+          # debian-binary：固定内容“2.0”
+          echo "2.0" > "$WORK/debian-binary"
+
+          # 生成 .ipk（使用 `ar` 打包）
+          IPK="dist/${PKG_NAME}_${PKG_VERSION}_aarch64_cortex-a53.ipk"
+          (cd "$WORK" && ar r "$PWD/../tmp.ipk" debian-binary control.tar.gz data.tar.gz)
+          mv dist/tmp.ipk "$IPK"
+
+          # 校验文件
+          (cd dist && sha256sum *.ipk > checksums.txt)
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: openwrt-aarch64_cortex-a53-ipk
+          path: |
+            dist/*.ipk
+            dist/checksums.txt
+          if-no-files-found: error
